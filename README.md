@@ -1,6 +1,6 @@
 # hunk-opencode
 
-Ask OpenCode questions about the current diff line without leaving Hunk. The extension opens a persistent OpenCode session for the review and shows answers in a docked pane.
+Ask OpenCode questions about the current diff line without leaving Hunk. The extension opens a persistent OpenCode session for the review, initializes it from one `git status --short`, and lets OpenCode read the relevant changed files before answering questions in a docked pane.
 
 ## Install for development
 
@@ -40,4 +40,4 @@ Remap the shortcut in `~/.config/hunk/config.toml`:
 
 ## Safety
 
-The dedicated OpenCode session denies tools. The selected file, hunk, side, line, and patch context are supplied directly with each question, avoiding hidden permission prompts or file mutations while Hunk owns the terminal.
+During initialization, the extension runs `git status --short` once and supplies its output to the dedicated OpenCode session. OpenCode receives repository `read` and `glob` access so it can select relevant changed files; shell access, mutations, external-directory access, and common environment files remain denied. The selected hunk, side, line, and patch context are supplied directly with each question.

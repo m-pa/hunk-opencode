@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { buildQuestionPrompt, selectedHunkPatch } from "./context"
+import { buildQuestionPrompt, buildReviewInitializationPrompt, selectedHunkPatch } from "./context"
 
 describe("selectedHunkPatch", () => {
   test("returns only the selected hunk", () => {
@@ -20,5 +20,15 @@ describe("buildQuestionPrompt", () => {
     })
     expect(prompt).toContain("src/a.ts:42 (new side)")
     expect(prompt).toContain("Can this throw?")
+  })
+})
+
+describe("buildReviewInitializationPrompt", () => {
+  test("requires one status command and read-only inspection", () => {
+    const prompt = buildReviewInitializationPrompt(" M src/a.ts")
+    expect(prompt).toContain("ran git status --short exactly once")
+    expect(prompt).toContain("<untrusted-git-status>\n M src/a.ts\n</untrusted-git-status>")
+    expect(prompt).toContain("read and glob")
+    expect(prompt).toContain("Do not modify files")
   })
 })

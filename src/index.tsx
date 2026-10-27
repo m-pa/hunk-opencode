@@ -3,7 +3,7 @@ import { Service } from "@opencode/client/service"
 import { useEffect, useRef, useSyncExternalStore } from "react"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import type { ExtensionPaneProps, HunkExtensionAPI } from "hunkdiff/extension"
-import { buildQuestionPrompt, makeQuestionContext } from "./context"
+import { buildQuestionPrompt, buildReviewInitializationPrompt, makeQuestionContext } from "./context"
 
 type EntryStatus = "pending" | "answered" | "error"
 
@@ -24,6 +24,16 @@ let sessionID: string | undefined
 let clientPromise: ReturnType<typeof connect> | undefined
 let requestQueue = Promise.resolve()
 const listeners = new Set<() => void>()
+
+const READ_ONLY_PERMISSIONS = [
+  { action: "*", resource: "*", effect: "deny" as const },
+  { action: "read", resource: "*", effect: "allow" as const },
+  { action: "read", resource: "*.env", effect: "deny" as const },
+  { action: "read", resource: "*.env.*", effect: "deny" as const },
+  { action: "read", resource: "*.env.example", effect: "allow" as const },
+  { action: "glob", resource: "*", effect: "allow" as const },
+  { action: "external_directory", resource: "*", effect: "deny" as const },
+]
 
 function publish(next: readonly Entry[]) {
   entries = next
@@ -52,6 +62,21 @@ async function connect() {
   })
 }
 
+async function gitStatus(cwd: string): Promise<string> {
+  const process = Bun.spawn(["git", "status", "--short"], {
+    cwd,
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+  const [status, error, exitCode] = await Promise.all([
+    new Response(process.stdout).text(),
+    new Response(process.stderr).text(),
+    process.exited,
+  ])
+  if (exitCode !== 0) throw new Error(error.trim() || `git status exited with code ${exitCode}`)
+  return status.trimEnd() || "(clean working tree)"
+}
+
 function assistantAnswer(message: Awaited<ReturnType<Awaited<ReturnType<typeof connect>>["message"]["list"]>>) {
   const assistant = message.data.find((item) => item.type === "assistant")
   if (!assistant || assistant.type !== "assistant") return undefined
@@ -64,25 +89,39 @@ function assistantAnswer(message: Awaited<ReturnType<Awaited<ReturnType<typeof c
 }
 
 async function askOpenCode(cwd: string, prompt: string): Promise<string> {
-  clientPromise ??= connect()
+  clientPromise ??= connect().catch((error) => {
+    clientPromise = undefined
+    throw error
+  })
   const client = await clientPromise
-  if (!sessionID) {
+  let activeSessionID = sessionID
+  if (!activeSessionID) {
+    const status = await gitStatus(cwd)
     const session = await client.session.create({
       title: `Hunk review: ${cwd.split("/").filter(Boolean).at(-1) ?? cwd}`,
       location: { directory: cwd },
       metadata: { source: "hunk-opencode" },
-      permissions: [{ action: "*", resource: "*", effect: "deny" }],
+      permissions: READ_ONLY_PERMISSIONS,
     })
-    sessionID = session.id
+    activeSessionID = session.id
+    sessionID = activeSessionID
+
+    try {
+      await client.session.prompt({ sessionID: activeSessionID, text: buildReviewInitializationPrompt(status) })
+      await client.session.wait({ sessionID: activeSessionID })
+    } catch (error) {
+      if (sessionID === activeSessionID) sessionID = undefined
+      throw error
+    }
   }
 
   const previous = assistantAnswer(
-    await client.message.list({ sessionID, type: "assistant", order: "desc", limit: 1 }),
+    await client.message.list({ sessionID: activeSessionID, type: "assistant", order: "desc", limit: 1 }),
   )
-  await client.session.prompt({ sessionID, text: prompt })
-  await client.session.wait({ sessionID })
+  await client.session.prompt({ sessionID: activeSessionID, text: prompt })
+  await client.session.wait({ sessionID: activeSessionID })
   const messages = await client.message.list({
-    sessionID,
+    sessionID: activeSessionID,
     type: "assistant",
     order: "desc",
     limit: 1,
